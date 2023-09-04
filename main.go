@@ -1,18 +1,33 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
+	"github.com/KanishkaVerma054/rssagg/internal/database"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
 	"github.com/joho/godotenv"
+
+	_ "github.com/lib/pq" //import using _: just to say include this code in my  program even though i'm not calling it directly
 )
+
+type apiConfig struct {
+	DB *database.Queries
+}
 
 func main() {
 	//fmt.Println("hello world!")
+	// feed, err := urlToFeed("https://kanishk-verma.hashnode.dev/rss.xml")
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+	// fmt.Println(feed) 
+
 
 	godotenv.Load(".env")
 
@@ -20,6 +35,23 @@ func main() {
 	if portString == "" {
 		log.Fatal("PORT is not found in the enviroment")
 	}
+
+	dbURL := os.Getenv("DB_URL")
+	if dbURL == "" {
+		log.Fatal("DB_URL is not found in the enviroment")
+	}
+
+	conn, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatal("Can't connect to databse:", err)
+	}
+
+
+	db := database.New(conn)
+	apiCfg := apiConfig{
+		DB: db,
+	}
+	go startScrapping(db, 10, time.Minute)
 
 	router := chi.NewRouter()
 
@@ -35,6 +67,17 @@ func main() {
 	v1Router := chi.NewRouter()
 	v1Router.Get("/healthz", handlerReadliness)
 	v1Router.Get("/err", handleErr)
+	v1Router.Post("/users", apiCfg.handlerCreateUser)
+	v1Router.Get("/users", apiCfg.middlewareAuth(apiCfg.handlerGetUser))
+
+	v1Router.Post("/feeds", apiCfg.middlewareAuth(apiCfg.handlerCreateFeed))
+	v1Router.Get("/feeds", apiCfg.handlerGetFeeds)
+
+	v1Router.Get("/posts", apiCfg.middlewareAuth(apiCfg.handlerGetPostsForUser))
+
+	v1Router.Post("/feed_follows", apiCfg.middlewareAuth(apiCfg.handlerCreateFeedFollow))
+	v1Router.Get("/feed_follows", apiCfg.middlewareAuth(apiCfg.handlerGetFeedFollows))
+	v1Router.Delete("/feed_follows/{feedFollowID}", apiCfg.middlewareAuth(apiCfg.handlerDeleteFeedFollow))
 
 	router.Mount("/v1", v1Router)
 
@@ -44,8 +87,7 @@ func main() {
 	}
 
 	log.Printf("Server starting on port %v", portString)
-
-	err := srv.ListenAndServe()
+	err = srv.ListenAndServe()
 	if err != nil {
 		log.Fatal(err)
 	}
